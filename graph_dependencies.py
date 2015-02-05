@@ -35,38 +35,53 @@ class ImportVisitor(ast.NodeVisitor):
     #     #pprint(node)
 
 
-def parseModuleImports(startPath, recursive, importEdges=None, 
-                       ignoreFileRegex=r'(/lib/python\d+?\.\d+?/|/\.venv/)'):
-    if not os.path.isdir(startPath):
-        raise ValueError('startPath must be a directory')
+def parseDependencies(startPath, recursive):
+    importEdges = set()
+    modulePat = re.compile(r'/(?P<name>.+?)\.py$')
 
-    if importEdges is None:
-        importEdges = set()
+    for filePath in walkPath(startPath, recursive, 
+                             ignoreRegex=r'(/lib/python\d+?\.\d+?/|/\.venv/)'):
+        # Only want Python scripts
+        moduleMatcher = modulePat.search(filePath)
+        if not moduleMatcher:
+            continue
 
-    for dirEntry in os.listdir(startPath):
-        filePath = os.path.join(startPath, dirEntry)
-        if os.path.isdir(filePath):
-            # Recurse into subdirectories
-            if recursive:
-                parseModuleImports(filePath, recursive, importEdges)
-        else:
-            moduleMatch = re.search(r'/(?P<name>.+?)\.py$', filePath)
-            if moduleMatch and not re.search(ignoreFileRegex, filePath):
-                # Parse Python scripts
-                moduleName = moduleMatch.group('name').replace('/', '.')
-                if moduleName.endswith('.__init__'):
-                    moduleName, _ = moduleName.rsplit('.', 1)
+        # Module naming ghettoness
+        moduleName = moduleMatcher.group('name').replace('/', '.')
+        if moduleName.endswith('.__init__'):
+            moduleName, _ = moduleName.rsplit('.', 1)
 
-                print 'Parsing "%s" module: %s' % (moduleName, filePath)
-                with open(filePath, 'rb') as scriptFile:
-                    rootNode = ast.parse(scriptFile.read(), filePath)
-                    visitor = ImportVisitor()
-                    visitor.visit(rootNode)
-                    for referencedModule in filter(lambda module: module != '__future__', visitor.modules):
-                        # Append to adjacency list
-                        importEdges.add((moduleName, referencedModule))
+        # Parse module contents
+        print 'Parsing "%s" module: %s' % (moduleName, filePath)
+        with open(filePath, 'rb') as scriptFile:
+            rootNode = ast.parse(scriptFile.read(), filePath)
+            visitor = ImportVisitor()
+            visitor.visit(rootNode)
+            for referencedModule in filter(lambda module: module != '__future__', visitor.modules):
+                # Append to adjacency list
+                importEdges.add((moduleName, referencedModule))
 
     return importEdges
+
+
+def walkPath(startPath, recursive, 
+             matchRegex=r'.*', ignoreRegex=None):
+    if os.path.isdir(startPath):
+        # Path is a directory
+        matchPat = re.compile(matchRegex)
+        ignorePat = re.compile(ignoreRegex) if ignoreRegex else None
+
+        for dirEntry in os.listdir(startPath):
+            filePath = os.path.join(startPath, dirEntry)
+            if os.path.isdir(filePath):
+                # Recurse into subdirectories
+                if recursive:
+                    walkPath(filePath, recursive, matchRegex, ignoreRegex)
+            elif matchPat.search(filePath) and (ignorePat and not ignorePat.search(filePath)):
+                yield filePath
+    else:
+        # Path is a file
+        yield startPath
 
 
 def createGraph(adjacencyList):
@@ -93,7 +108,7 @@ def main():
     argp.add_argument('--output', '-o', required=True, help='Output GraphML file (*.graphml)')
     args = argp.parse_args()
 
-    dependencyGraph = createGraph(parseModuleImports(args.input, recursive=args.recurse))
+    dependencyGraph = createGraph(parseDependencies(args.input, recursive=args.recurse))
     nx.write_graphml(dependencyGraph, args.output, prettyprint=True)
 
 

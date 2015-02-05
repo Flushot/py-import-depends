@@ -2,3 +2,4 @@
 *.pyo
 *.log
 .DS_Store
+*.graphml
